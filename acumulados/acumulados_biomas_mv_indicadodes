@@ -1,0 +1,80 @@
+-- NÚMERO DE EVENTOS ACUMULADOS BIOMAS
+-- Consulta a ser realizada no banco espelho para período especifico a ser definido no Passo 01 e Passo 02
+
+-- Passo 01 Criação de uma tabela de datas temporária para o intervalo especificado
+WITH RECURSIVE DateRange AS ( 
+    	SELECT '2025-01-01'::date AS dt    -- DEFINIR DATA DE INICIO DO RANGER
+    	UNION ALL 
+    	SELECT (dt + INTERVAL '1 day')::date 
+    	FROM DateRange 
+    	WHERE (dt + INTERVAL '1 day') <= '2026-01-01'::date  --DEFINIR DATA FINAL DO RANGER
+), 
+
+--União mv_indicadores_queimadas e mv_indicadores_queimadas2	
+
+mv_indicadores_unida AS (
+	SELECT 
+		id,
+		id_evento,
+		id_status_evento_atual,
+		dt_passagem,
+		dt_min_evento,
+	    geom_acumulada,
+		area_acumulada_ha,
+		delta_area_ha,
+        peso_global_passagem
+	FROM queimadas.mv_indicadores_queimadas
+	UNION
+	SELECT 
+		id,
+		id_evento,
+		id_status_evento_atual,
+		dt_passagem,
+		dt_min_evento,
+	    geom_acumulada,
+ 		area_acumulada_ha,
+		delta_area_ha,
+        peso_global_passagem
+	FROM queimadas.mv_indicadores_queimadas2
+),  
+
+-- Passo 02 Sub consulta para eventos acumulados, detecções, área de influencia diária e severidade média diária
+sub_consulta01 AS (
+SELECT 
+  	TO_CHAR(dt_passagem, 'YYYY/MM/DD')::date as data,
+    COUNT(CASE WHEN dt_min_evento = dt_passagem THEN dt_min_evento ELSE NULL END) as num_eventos
+  	
+FROM 
+  	mv_indicadores_unida mv2
+JOIN 
+        queimadas.tb_escopo_queimadas AS escopo
+        ON ST_Intersects(mv2.geom_acumulada, escopo.geom)
+JOIN 
+        queimadas.tb_bioma_subdividida AS bioma
+        ON ST_Intersects(mv2.geom_acumulada, bioma.geom)	  
+
+WHERE  
+	mv2.id_status_evento_atual IN (1, 2, 3) -- Condição de eventos ativos, em observação
+    AND mv2.area_acumulada_ha > 1 -- Condição de área maior que 1km2
+    AND bioma.cd_bioma = 1 -- Filtro para o bioma (1-Amazônia, 3 -Cerrado , 6 - Pantanal)
+	AND mv2.dt_passagem >= '2025-01-01'-- DEFINE O PERIODO INVESTIGADO PARA ÁREA DE INFLUENCIA
+	AND mv2.dt_passagem <= '2026-01-01' -- DEFINE O PERIODO INVESTIGADO PARA ÁREA DE INFLUENCIA
+
+GROUP BY 
+  	data
+)
+
+
+-- Passo 03 Consulta principal que combina consultas acima
+SELECT  
+    dr.dt AS "Data", 
+	COALESCE(sb1.num_eventos, 0) AS "Num. de Eventos"
+	
+FROM  
+	DateRange dr 
+LEFT JOIN
+    	sub_consulta01 sb1
+ON  
+    	dr.dt = sb1.data
+ORDER BY  
+    	dr.dt ASC; 
